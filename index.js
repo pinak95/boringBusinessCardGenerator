@@ -84,8 +84,25 @@ const userQuestions = [
     type: "input",
     name: "portfolio",
     message:
-      "What is your portfolio website URL? (Optional, press Enter to skip)",
+      "What is your portfolio website URL? (Optional, e.g., example.com or https://example.com, press Enter to skip)",
     default: "",
+    validate: (input) => {
+      if (!input.trim()) return true;
+      const trimmed = input.trim();
+      if (
+        /^[a-zA-Z0-9][a-zA-Z0-9-.]+\.[a-zA-Z]{2,}$/.test(trimmed) ||
+        /^https?:\/\/[a-zA-Z0-9][a-zA-Z0-9-.]+\.[a-zA-Z]{2,}/.test(trimmed)
+      ) {
+        return true;
+      }
+      return "Please enter a valid hostname (e.g., example.com) or URL (e.g., https://example.com).";
+    },
+    filter: (input) => {
+      if (!input.trim()) return "";
+      const trimmed = input.trim();
+      if (/^https?:\/\//.test(trimmed)) return trimmed;
+      return `https://${trimmed}`;
+    },
   },
   {
     type: "input",
@@ -215,8 +232,12 @@ const questions = [
       {
         name: \`Send me an \${chalk.cyan.bold("email")} 📧\`,
         value: async () => {
-          await open("mailto:${email}");
-          console.log(chalk.green("\\nEmail client opened. Looking forward to your message!\\n"));
+          try {
+            await open("mailto:${email}");
+            console.log(chalk.green("\\nEmail client opened. Looking forward to your message!\\n"));
+          } catch (error) {
+            console.error(chalk.red("\\nFailed to open email client: " + error.message + "\\n"));
+          }
         },
       },
       ${
@@ -225,8 +246,12 @@ const questions = [
       {
         name: \`Message me on \${chalk.blue.bold("LinkedIn")} 💬\`,
         value: async () => {
-          await open("https://www.linkedin.com/messaging/thread/new/?recipient=${linkedinMessage}");
-          console.log(chalk.green("\\nLinkedIn messaging opened. Let's connect!\\n"));
+          try {
+            await open("https://www.linkedin.com/messaging/thread/new/?recipient=${linkedinMessage}");
+            console.log(chalk.green("\\nLinkedIn messaging opened. Let's connect!\\n"));
+          } catch (error) {
+            console.error(chalk.red("\\nFailed to open LinkedIn messaging: " + error.message + "\\n"));
+          }
         },
       },
       `
@@ -238,8 +263,12 @@ const questions = [
       {
         name: \`Visit my \${chalk.green.bold("portfolio")} 🌐\`,
         value: async () => {
-          await open("${portfolio}");
-          console.log(chalk.green("\\nPortfolio opened. Explore my work!\\n"));
+          try {
+            await open("${portfolio}");
+            console.log(chalk.green("\\nPortfolio opened. Explore my work!\\n"));
+          } catch (error) {
+            console.error(chalk.red("\\nFailed to open portfolio: " + error.message + "\\n"));
+          }
         },
       },
       `
@@ -251,8 +280,12 @@ const questions = [
       {
         name: \`Check my \${chalk.blue.bold("GitHub")} 💻\`,
         value: async () => {
-          await open("${github}");
-          console.log(chalk.green("\\nGitHub opened. See my projects!\\n"));
+          try {
+            await open("${github}");
+            console.log(chalk.green("\\nGitHub opened. See my projects!\\n"));
+          } catch (error) {
+            console.error(chalk.red("\\nFailed to open GitHub: " + error.message + "\\n"));
+          }
         },
       },
       `
@@ -420,6 +453,11 @@ const generateReadme = ({
   packageName,
 }) => {
   const linkedinMessage = getLinkedInMessageId(linkedin);
+  // Normalize portfolio URL for README
+  const normalizedPortfolio =
+    portfolio && !/^https?:\/\//.test(portfolio)
+      ? `https://${portfolio}`
+      : portfolio;
   return `
 # ${fullName}'s Business Card CLI
 
@@ -433,7 +471,7 @@ A professional CLI-based business card for ${fullName} (${handle}), showcasing m
 ${certifications !== "none" ? `- **Certification**: ${certifications}` : ""}
 ${tagline ? `- **Tagline**: ${tagline}` : ""}
 - **Links**:
-  ${portfolio ? `- [Portfolio](${portfolio})` : ""}
+  ${normalizedPortfolio ? `- [Portfolio](${normalizedPortfolio})` : ""}
   ${github ? `- [GitHub](${github})` : ""}
   ${linkedin ? `- [LinkedIn](${linkedin})` : ""}
   - Email: ${email}
@@ -442,7 +480,7 @@ ${tagline ? `- **Tagline**: ${tagline}` : ""}
 - Interactive CLI interface with options to:
   - Send an email 📧
   ${linkedinMessage ? "- Message me on LinkedIn 💬" : ""}
-  ${portfolio ? "- Visit my portfolio 🌐" : ""}
+  ${normalizedPortfolio ? "- Visit my portfolio 🌐" : ""}
   ${github ? "- Check my GitHub 💻" : ""}
   - Exit
 - Professional styling with a double-bordered, cyan-themed card on a black background
@@ -499,7 +537,11 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 Connect with me:
 - Email: [${email}](mailto:${email})
 ${linkedin ? `- LinkedIn: [${linkedin.split("/").pop()}](${linkedin})` : ""}
-${portfolio ? `- Portfolio: [${portfolio}](${portfolio})` : ""}
+${
+  normalizedPortfolio
+    ? `- Portfolio: [${normalizedPortfolio}](${normalizedPortfolio})`
+    : ""
+}
 ${github ? `- GitHub: [${github.split("/").pop()}](${github})` : ""}
 
 Run \`npx ${packageName}\` to interact with my card and explore my work!
