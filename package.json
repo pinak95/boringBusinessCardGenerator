@@ -1,0 +1,39 @@
+{
+  "name": "boring-business-card-generator",
+  "version": "1.0.0",
+  "description": "A CLI tool to generate personalized business card CLI packages for npm",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "bin": {
+    "create-business-card-cli": "./index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pinak95/boringBusinessCardGenerator.git"
+  },
+  "files": [
+    "index.js",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "cli",
+    "businesscard",
+    "npxcard",
+    "npmcard",
+    "generator"
+  ],
+  "author": "Pinak Thakar",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "clear": "^0.1.0",
+    "fs-extra": "^11.2.0",
+    "inquirer": "^9.2.0"
+  }
+}
