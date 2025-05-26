@@ -158,6 +158,19 @@ const npmQuestions = [
   },
 ];
 
+// Define prompt for publish-time 2FA OTP
+const publish2FAQuestion = [
+  {
+    type: "input",
+    name: "publish2FACode",
+    message: "Enter your npm two-factor authentication code for publishing:",
+    validate: (input) =>
+      input.trim()
+        ? true
+        : "2FA code is required for publishing with 2FA enabled.",
+  },
+];
+
 // Function to extract LinkedIn messaging ID from URL
 const getLinkedInMessageId = (linkedinUrl) => {
   if (!linkedinUrl) return "";
@@ -519,54 +532,89 @@ SOFTWARE.
 `;
 
 // Function to authenticate with npm
-async function authenticateNpm({
-  npmUsername,
-  npmPassword,
-  npmEmail,
-  npm2FACode,
-}) {
-  try {
-    console.log(
-      chalk.yellow("Close all browsers to avoid authentication errors.")
-    );
-    // Create temporary .npmrc file
-    const npmrcPath = path.join(process.cwd(), ".npmrc");
-    const npmrcContent = `
-      //registry.npmjs.org/:_authToken=\${process.env.NPM_TOKEN}
-      email=${npmEmail}
-    `;
-    await fs.writeFile(npmrcPath, npmrcContent);
+async function authenticateNpm(
+  { npmUsername, npmPassword, npmEmail, npm2FACode },
+  prompt,
+  maxRetries = 2
+) {
+  let attempts = 0;
+  while (attempts <= maxRetries) {
+    try {
+      console.log(
+        chalk.yellow("Close all browsers to avoid authentication errors.")
+      );
+      // Create temporary .npmrc file
+      const npmrcPath = path.join(process.cwd(), ".npmrc");
+      const npmrcContent = `
+        //registry.npmjs.org/:_authToken=\${process.env.NPM_TOKEN}
+        email=${npmEmail}
+      `;
+      await fs.writeFile(npmrcPath, npmrcContent);
 
-    // Attempt npm login
-    const loginCommand = `npm login --registry=https://registry.npmjs.org/`;
-    const loginInput = `${npmUsername}\n${npmPassword}\n${npmEmail}${
-      npm2FACode ? `\n${npm2FACode}` : ""
-    }\n`;
-    execSync(loginCommand, { input: loginInput, stdio: "inherit" });
+      // Attempt npm login
+      const loginCommand = `npm login --registry=https://registry.npmjs.org/`;
+      const loginInput = `${npmUsername}\n${npmPassword}\n${npmEmail}${
+        npm2FACode ? `\n${npm2FACode}` : ""
+      }\n`;
+      execSync(loginCommand, { input: loginInput, stdio: "inherit" });
 
-    // Clean up .npmrc
-    await fs.remove(npmrcPath);
+      // Read auth token from .npmrc
+      const globalNpmrcPath = path.join(
+        process.env.USERPROFILE || process.env.HOME,
+        ".npmrc"
+      );
+      let token = "";
+      if (await fs.pathExists(globalNpmrcPath)) {
+        const npmrcContent = await fs.readFile(globalNpmrcPath, "utf8");
+        const tokenMatch = npmrcContent.match(
+          /\/\/registry\.npmjs\.org\/:_authToken=(.+)/
+        );
+        if (tokenMatch) token = tokenMatch[1];
+      }
 
-    console.log(chalk.green.bold("Successfully authenticated with npm!"));
-    return true;
-  } catch (error) {
-    console.error(
-      chalk.red.bold("Failed to authenticate with npm: "),
-      error.message
-    );
-    console.log(chalk.yellow("Ensure browsers are closed and try again."));
-    return false;
+      // Store token in project .npmrc
+      await fs.writeFile(
+        npmrcPath,
+        `//registry.npmjs.org/:_authToken=${token}\nemail=${npmEmail}`
+      );
+
+      console.log(chalk.green.bold("Successfully authenticated with npm!"));
+      return { success: true, npmrcPath, token };
+    } catch (error) {
+      attempts++;
+      console.error(
+        chalk.red.bold(`Authentication attempt ${attempts} failed: `),
+        error.message
+      );
+      if (attempts > maxRetries) {
+        console.log(chalk.yellow("Maximum authentication attempts reached."));
+        return { success: false };
+      }
+      console.log(chalk.cyan("Retrying authentication..."));
+      const retryAnswers = await prompt([
+        {
+          type: "input",
+          name: "npm2FACode",
+          message:
+            "Enter a new npm two-factor authentication code (if enabled, press Enter to skip):",
+          default: "",
+        },
+      ]);
+      npm2FACode = retryAnswers.npm2FACode;
+    }
   }
+  return { success: false };
 }
 
 // Function to publish the package with retry on name conflict
-async function publishPackage({ outputDir, userAnswers, prompt }) {
+async function publishPackage({ outputDir, userAnswers, prompt, npmAnswers }) {
   let currentPackageName = userAnswers.packageName;
   let attemptCount = 0;
   const maxAttempts = 3;
   const maxNpxRetries = 2;
 
   while (attemptCount < maxAttempts) {
+    let npmrcPath;
     try {
       // Test local execution
       console.log(
@@ -578,11 +626,27 @@ async function publishPackage({ outputDir, userAnswers, prompt }) {
       console.log(chalk.cyan("Clearing npm cache before publishing..."));
       execSync("npm cache clean --force", { stdio: "inherit" });
 
+      // Ensure authentication for publishing
+      const authResult = await authenticateNpm(npmAnswers, prompt);
+      if (!authResult.success) {
+        throw new Error("Failed to authenticate for publishing");
+      }
+      npmrcPath = authResult.npmrcPath;
+
+      // Prompt for 2FA OTP for publishing if 2FA was used
+      let publish2FACode = "";
+      if (npmAnswers.npm2FACode) {
+        const publishAnswers = await prompt(publish2FAQuestion);
+        publish2FACode = publishAnswers.publish2FACode;
+      }
+
       // Publish package
       console.log(chalk.cyan(`Publishing ${currentPackageName} to npm...`));
       const publishCommand = currentPackageName.startsWith("@")
-        ? "npm publish --access=public"
-        : "npm publish";
+        ? `npm publish --access=public${
+            publish2FACode ? ` --otp=${publish2FACode}` : ""
+          }`
+        : `npm publish${publish2FACode ? ` --otp=${publish2FACode}` : ""}`;
       execSync(publishCommand, { cwd: outputDir, stdio: "inherit" });
 
       // Wait for registry propagation
@@ -637,16 +701,16 @@ async function publishPackage({ outputDir, userAnswers, prompt }) {
     } catch (error) {
       const errorMessage = error.message || "";
       if (
-        errorMessage.includes("403") &&
-        (errorMessage.includes("cannot publish") ||
-          errorMessage.includes("Package name too similar"))
+        errorMessage.includes("403") ||
+        errorMessage.includes("ENEEDAUTH") ||
+        errorMessage.includes("cannot publish") ||
+        errorMessage.includes("Package name too")
       ) {
-        attemptCount++;
         console.error(
-          chalk.red.bold(
-            `Error: The package name '${currentPackageName}' is already taken or too similar to an existing package on npm.`
-          )
+          chalk.red.bold(`Error publishing '${currentPackageName}': `),
+          errorMessage
         );
+        attemptCount++;
         if (attemptCount >= maxAttempts) {
           console.log(
             chalk.yellow(
@@ -706,6 +770,11 @@ async function publishPackage({ outputDir, userAnswers, prompt }) {
       } else {
         console.error(chalk.red.bold("Publishing failed: "), errorMessage);
         break;
+      }
+    } finally {
+      // Clean up .npmrc
+      if (npmrcPath && (await fs.pathExists(npmrcPath))) {
+        await fs.remove(npmrcPath);
       }
     }
   }
@@ -780,34 +849,8 @@ async function run() {
     );
     const npmAnswers = await prompt(npmQuestions);
 
-    // Authenticate with npm
-    const authenticated = await authenticateNpm(npmAnswers);
-    if (!authenticated) {
-      console.log(chalk.yellow("You can manually publish later by:"));
-      console.log(chalk.yellow(`  cd ${userAnswers.packageName}`));
-      console.log(chalk.yellow("  npm install"));
-      console.log(chalk.yellow("  npm login"));
-      console.log(
-        chalk.yellow(
-          `  npm publish${
-            userAnswers.packageName.startsWith("/") ? " --access=public" : ""
-          }`
-        )
-      );
-      console.log(
-        chalk.gray(
-          "Note: Update the repository URL in package.json before publishing."
-        )
-      );
-      return;
-    }
-
-    // Install dependencies
-    console.log(chalk.cyan("Installing dependencies..."));
-    execSync("npm install", { cwd: outputDir, stdio: "inherit" });
-
     // Attempt to publish
-    await publishPackage({ outputDir, userAnswers, prompt });
+    await publishPackage({ outputDir, userAnswers, prompt, npmAnswers });
   } catch (error) {
     console.error(
       chalk.red.bold("Error generating business card: "),
